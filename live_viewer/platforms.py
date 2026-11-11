@@ -100,6 +100,30 @@ PLATFORM_SPECS: dict[str, PlatformSpec] = {
         topic_query_room=True,
         max_room_digits=15,
     ),
+    "douyin": PlatformSpec(
+        key="douyin",
+        caption="抖音",
+        referer="https://live.douyin.com/",
+        # 只接受直播页域名；分享短链 v.douyin.com 需要跟随跳转，本版不支持。
+        page_hosts=("live.douyin.com",),
+        cookie_domains=("douyin.com",),
+        # 实测 FLV 主机形如 pull-flv-l13[-admin].douyincdn.com，段位随房间变化，
+        # 因此按后缀匹配，不写死完整主机名。
+        media_domains=("douyincdn.com",),
+        resolve_method="_douyin",
+        # 档位是字符串（origin/uhd/hd/sd/ld/md），这里用与 core.DOUYIN_TIERS 一致的数值。
+        preferred_quality=6,
+        import_credentials=(),
+        paste_alias="",
+        # 抖音 Web 登录链路签名复杂、风控严，本版不提供扫码登录。
+        qr_login=False,
+        qr_credentials=(),
+        verify_login=False,
+        unverified_message="抖音 Cookie 已导入；账号有效性尚未单独验证",
+        resign_backups=False,
+        topic_query_room=False,
+        max_room_digits=15,
+    ),
 }
 
 

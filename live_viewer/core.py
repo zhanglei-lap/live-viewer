@@ -151,13 +151,14 @@ class Stream:
     urls: list[str] = field(repr=False)
     nominal_kbps: int | None = None
     backup_cdns: list[str] = field(default_factory=list, repr=False)
+    codec: str = "AVC"
 
     def summary(self) -> dict:
         return {
             "platform": self.platform, "room": self.room,
             "requested": self.requested, "actual": self.actual,
             "actual_name": self.actual_name, "different_from_request": self.requested != self.actual,
-            "nominal_kbps": self.nominal_kbps, "format": "HTTP-FLV", "codec_requested": "AVC",
+            "nominal_kbps": self.nominal_kbps, "format": "HTTP-FLV", "codec_requested": self.codec,
             "cdn_candidates": len(self.urls) + len(self.backup_cdns),
         }
 
@@ -225,6 +226,73 @@ def parse_douyu_room(page: str, requested_room: str) -> DouyuRoom:
         if match:
             return DouyuRoom(match[1])
     raise ViewerError("斗鱼网页未提供可确认的真实房间号，请稍后重试。")
+
+
+# 抖音直播档位：数值越大越清晰。ao 是纯音频流（无分辨率、fps 为 0），
+# 交给播放器只会得到黑屏，因此不在此表中，解析时直接丢弃。
+DOUYIN_TIERS = {"origin": (6, "原画"), "uhd": (5, "超清"), "hd": (4, "高清"),
+                "sd": (3, "标清"), "ld": (2, "流畅"), "md": (1, "极速")}
+# 旧结构 flv_pull_url 的键。仅在新结构缺失时使用。
+DOUYIN_LEGACY_TIERS = {"FULL_HD1": (6, "原画"), "HD1": (4, "高清"),
+                       "SD1": (3, "标清"), "SD2": (2, "流畅")}
+
+
+def douyin_secure(url: str) -> str:
+    """抖音接口下发的是 http 地址，但同一 CDN 主机同时提供 https。
+
+    升级为 https 后即可沿用 validate_media_url 的 HTTPS-only 约束与证书校验，
+    不需要为抖音放宽安全规则。
+    """
+    if not isinstance(url, str) or not url:
+        return ""
+    return "https://" + url[len("http://"):] if url.startswith("http://") else url
+
+
+def douyin_streams(stream_url: dict) -> list[dict]:
+    """从抖音 stream_url 提取可选 FLV 档位，按清晰度降序。
+
+    新结构 live_core_sdk_data 优先，旧结构 flv_pull_url 兜底。只保留带 FLV 地址的
+    档位；优先 h264，只有该房间完全没有 h264 时才退回其他编码（PotPlayer 可解 HEVC）。
+    """
+    tiers: list[dict] = []
+    core = (stream_url or {}).get("live_core_sdk_data") or {}
+    raw = (core.get("pull_data") or {}).get("stream_data")
+    if raw:
+        try:
+            decoded = json.loads(raw) if isinstance(raw, str) else raw
+        except (ValueError, TypeError):
+            decoded = {}
+        for key, tier in ((decoded.get("data") or {}) if isinstance(decoded, dict) else {}).items():
+            if key not in DOUYIN_TIERS:
+                continue  # 丢弃 ao 等纯音频档位
+            main = (tier or {}).get("main") or {}
+            backup = (tier or {}).get("backup") or {}
+            urls = [douyin_secure(main.get("flv")), douyin_secure(backup.get("flv"))]
+            urls = [url for url in urls if url]
+            if not urls:
+                continue
+            try:
+                params = json.loads(main.get("sdk_params") or "{}")
+            except (ValueError, TypeError):
+                params = {}
+            # 实测字段名是 VCodec / vbitrate（大小写敏感）。
+            codec = str(params.get("VCodec") or "").lower()
+            kbps = params.get("vbitrate")
+            value, name = DOUYIN_TIERS[key]
+            tiers.append({"value": value, "name": name, "urls": urls, "codec": codec,
+                          "kbps": int(kbps) // 1000 if isinstance(kbps, (int, float)) and kbps else None,
+                          "layout": "live_core_sdk_data"})
+    if not tiers:
+        for key, url in ((stream_url or {}).get("flv_pull_url") or {}).items():
+            if key not in DOUYIN_LEGACY_TIERS or not url:
+                continue
+            value, name = DOUYIN_LEGACY_TIERS[key]
+            tiers.append({"value": value, "name": name, "urls": [douyin_secure(url)], "codec": "",
+                          "kbps": None, "layout": "flv_pull_url"})
+    avc = [tier for tier in tiers if tier["codec"] in ("h264", "avc", "")]
+    chosen = avc or tiers
+    chosen.sort(key=lambda tier: tier["value"], reverse=True)
+    return chosen
 
 
 class PlatformClient:
@@ -370,6 +438,63 @@ class PlatformClient:
             raise ViewerError(f"斗鱼无法取得直播流（代码 {code}，{detail}）。", code="platform.stream_rejected")
         play = data["data"]
         return play
+
+    def _douyin_session(self):
+        """未登录访问直播首页即可获得 ttwid；这是 enter 接口的唯一前提。"""
+        if getattr(self, "douyin_ready", False):
+            return
+        try:
+            with self.session.get("https://live.douyin.com/", timeout=(8, 20)) as response:
+                if response.status_code != 200:
+                    raise ViewerError(f"抖音首页返回 HTTP {response.status_code}，请稍后重试。")
+        except requests.RequestException as exc:
+            raise ViewerError(connection_message(exc, "抖音首页", "https://live.douyin.com/",
+                                                 self.session.viewer_network_mode),
+                              code=connection_kind(exc)[1]) from None
+        if not any(cookie.name == "ttwid" and cookie.value for cookie in self.session.cookies):
+            raise ViewerError("抖音未下发匿名会话标识（ttwid），请稍后重试或改用已登录 Cookie。",
+                              code="platform.session_rejected")
+        self.douyin_ready = True
+
+    def _douyin_enter(self, room: str) -> dict:
+        params = {
+            "aid": "6383", "app_name": "douyin_web", "live_id": "1", "device_platform": "web",
+            "language": "zh-CN", "enter_from": "web_live", "cookie_enabled": "true",
+            "screen_width": "1920", "screen_height": "1080", "browser_language": "zh-CN",
+            "browser_platform": "Win32", "browser_name": "Chrome", "browser_version": "140.0.0.0",
+            "web_rid": room, "room_id_str": "", "enter_source": "", "is_need_double_stream": "false",
+        }
+        data, _ = self._api("https://live.douyin.com/webcast/room/web/enter/", params=params)
+        code = data.get("status_code")
+        if code == 0:
+            return data
+        if code == 4001038:
+            raise ViewerError("抖音未接受该房间号，请确认直播间链接，或改用 12–15 位房间号。",
+                              code="platform.stream_rejected", level="WARN")
+        if code == 10011:
+            raise ViewerError("抖音接口繁忙，请稍后重试。", code="platform.busy", level="WARN")
+        raise ViewerError(f"抖音接口返回状态 {code}，请稍后重试。", code="platform.stream_rejected")
+
+    def _douyin(self, room, requested):
+        self._douyin_session()
+        payload = self._douyin_enter(room)
+        data = payload.get("data") or {}
+        rooms = data.get("data") or []
+        if not rooms:
+            raise ViewerError("该抖音直播间不存在或当前未开播。", code="room.offline", level="WARN")
+        info = rooms[0]
+        if info.get("status") != 2:
+            raise ViewerError("该抖音直播间当前未开播。", code="room.offline", level="WARN")
+        streams = douyin_streams(info.get("stream_url") or {})
+        if not streams:
+            raise ViewerError("抖音未返回可供本工具播放的 FLV 流，该直播可能仅提供 HLS。",
+                              code="platform.stream_rejected")
+        # requested 是档位数值（6 = 原画）。取不高于请求值的最高档，全都更高时退回最低档。
+        chosen = next((tier for tier in streams if tier["value"] <= requested), streams[-1])
+        qualities = [Quality(tier["value"], tier["name"], tier["kbps"]) for tier in streams]
+        codec = "AVC" if chosen["codec"] in ("h264", "avc", "") else "HEVC"
+        return Stream("douyin", str(room), requested, chosen["value"], chosen["name"],
+                      qualities, list(chosen["urls"]), chosen["kbps"], codec=codec)
 
     def media_urls(self, stream: Stream, *, on_event=None):
         """Resolve backup CDNs lazily, only after previous media opens fail."""
