@@ -42,6 +42,9 @@ def main():
                 current = ROOT / file.relative_to(BASE / sub) if sub == "source" else None
                 archive.write(current if current is not None and current.is_file() else file, relative.as_posix())
         for relative in ("tools/build-p9-single.py", "Build-Single-EXE.cmd", "docs/p9-single-usage.md"):
+            # 文件夹版构建已把这些文件放进 source/，重复写入会产生同名条目。
+            if (BASE / "source" / relative).is_file():
+                continue
             archive.write(ROOT / relative, "source/" + relative)
         python_license = Path(sys.base_prefix) / "LICENSE.txt"
         if python_license.is_file():
