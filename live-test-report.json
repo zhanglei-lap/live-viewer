@@ -1,0 +1,99 @@
+{
+  "generated_at": "2026-10-06T00:03:25+08:00",
+  "comparison": [
+    {
+      "session": "匿名",
+      "tested_at": "2026-10-05T23:52:39+08:00",
+      "platform": "bilibili",
+      "room": "21622811",
+      "requested": 10000,
+      "actual": 250,
+      "actual_name": "超清",
+      "different_from_request": true,
+      "nominal_kbps": null,
+      "format": "HTTP-FLV",
+      "codec_requested": "AVC",
+      "cdn_candidates": 2,
+      "sample": {
+        "verification": "container_only",
+        "decoded": false,
+        "metadata": {
+          "width": 1280.0,
+          "height": 720.0,
+          "framerate": 30.0,
+          "videodatarate": 3321.344,
+          "audiodatarate": 128.0
+        },
+        "video_codec": "H.264",
+        "video_tags": 190,
+        "audio_tags": 296,
+        "bytes_read": 1507328,
+        "media_seconds": 6.27,
+        "sample_total_kbps": 1914
+      },
+      "status": "流读取成功；解码与实播待验证"
+    },
+    {
+      "session": "已导入 Cookie",
+      "tested_at": "2026-10-05T23:52:46+08:00",
+      "login": {
+        "verified": true,
+        "message": "B 站登录状态有效"
+      },
+      "platform": "bilibili",
+      "room": "21622811",
+      "requested": 10000,
+      "actual": 10000,
+      "actual_name": "原画",
+      "different_from_request": false,
+      "nominal_kbps": null,
+      "format": "HTTP-FLV",
+      "codec_requested": "AVC",
+      "cdn_candidates": 2,
+      "sample": {
+        "verification": "container_only",
+        "decoded": false,
+        "metadata": {
+          "width": 1920.0,
+          "height": 1080.0,
+          "framerate": 60.0,
+          "videodatarate": 6761.648,
+          "audiodatarate": 128.0
+        },
+        "video_codec": "H.264",
+        "video_tags": 181,
+        "audio_tags": 141,
+        "bytes_read": 2097152,
+        "media_seconds": 2.98,
+        "sample_total_kbps": 5591
+      },
+      "status": "流读取成功；解码与实播待验证"
+    }
+  ],
+  "playback": {
+    "platform": "bilibili",
+    "room_input": "35",
+    "session": "导入 Cookie",
+    "requested": 10000,
+    "connections": 3,
+    "bytes_forwarded": 333389824,
+    "failures": 2,
+    "status": "正在转发；请在 PotPlayer 确认画面与声音",
+    "last_stream": {
+      "platform": "bilibili",
+      "room": "21622811",
+      "requested": 10000,
+      "actual": 10000,
+      "actual_name": "原画",
+      "different_from_request": false,
+      "nominal_kbps": null,
+      "format": "HTTP-FLV",
+      "codec_requested": "AVC",
+      "cdn_candidates": 2
+    },
+    "decoded_verified": false,
+    "elapsed_seconds": 613.8,
+    "picture_and_audio_confirmed_by_user": false,
+    "user_note": ""
+  }
+}

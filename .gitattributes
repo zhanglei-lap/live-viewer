@@ -1,0 +1,24 @@
+# 统一换行符处理，避免 Windows 上反复出现全文件 diff
+* text=auto eol=lf
+
+# 批处理与 PowerShell 必须保持 CRLF
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 源码与文档
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.qss text eol=lf
+*.lua text eol=lf
+*.txt text eol=lf
+
+# 二进制
+*.png binary
+*.ico binary
+*.jpg binary
+*.zip binary
+*.exe binary
+*.dll binary
+*.pyd binary

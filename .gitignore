@@ -1,0 +1,36 @@
+# ============================================================
+# 本地直播 / LiveViewer —— 仓库只收源码、文档与构建脚本
+# 运行数据、构建产物、验证沙箱和第三方二进制一律不入库
+# ============================================================
+
+# ---- 运行数据与凭据（绝不入库）----
+.local/
+data/
+data-p8a/
+credentials/
+*.dpapi
+*.cookies.txt
+settings.json
+settings-unreadable-*.bak
+
+# ---- 构建产物 ----
+build/
+dist/
+*.spec
+__pycache__/
+*.py[cod]
+.venv/
+.venv-build/
+.venv-p0/
+
+# ---- 验证沙箱（含 PotPlayer 副本，约 3.5 GB）----
+.research/
+
+# ---- 第三方二进制（构建时由 tools/fetch-mpv.py 下载）----
+vendor/libmpv/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "本地直播 P0 事件结构 v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "event_id", "occurred_at", "level", "code", "source", "message", "impact", "presentation", "target", "session_id", "dedupe_key", "details", "demo"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "event_id": {"type": "string", "format": "uuid"},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "level": {"enum": ["DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"]},
+    "code": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"},
+    "source": {"type": "string", "minLength": 1, "maxLength": 80},
+    "message": {"type": "string", "minLength": 1, "maxLength": 500},
+    "impact": {"enum": ["none", "degraded", "start_blocked", "interrupted", "app_blocked"]},
+    "presentation": {"enum": ["log", "toast", "banner", "strong"]},
+    "target": {"type": ["string", "null"], "maxLength": 200},
+    "session_id": {"type": ["string", "null"], "format": "uuid"},
+    "dedupe_key": {"type": ["string", "null"], "maxLength": 150},
+    "demo": {"type": "boolean", "description": "P0 为 true；正式业务事件为 false。"},
+    "details": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {"type": "string", "maxLength": 253},
+        "stage": {"type": "string", "maxLength": 80},
+        "reason": {"type": "string", "maxLength": 100},
+        "attempt": {"type": "integer", "minimum": 0},
+        "network_mode": {"enum": ["direct", "system"]},
+        "event_count": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}
