@@ -144,6 +144,7 @@ VOD / 番剧走同一条 `play()`，只是 `request["kind"]="vod"`（番剧再�
 
 | 文件 | 行 | 关键符号 |
 |---|---:|---|
+| `platforms.py` | 138 | `PlatformSpec`、`PLATFORM_SPECS`、`require_spec`；**新增平台的唯一入口** |
 | `core.py` | 522 | `PlatformClient`（`resolve/_bilibili/_douyu/_douyu_play/media_urls`）、`Stream`、`Quality`、`parse_douyu_room`、`room_number` |
 | `network.py` | 110 | `IPv4FirstAdapter` 系列、`connection_kind`、`connection_message` |
 | `qr_login.py` | 242 | `QrLogin`、`LoginHttp`、`login_url`、`qr_png` |
@@ -219,13 +220,18 @@ VOD / 番剧走同一条 `play()`，只是 `request["kind"]="vod"`（番剧再�
 ## 8. 加功能落点速查表
 
 ### A. 新增一个直播平台
-1. `settings.py:11` `PLATFORMS` 加「中文名 → key」
-2. `core.py` 的 `REFERERS` / `COOKIE_DOMAINS` / `MEDIA_DOMAINS` 加域名
-3. `core.py:255` `PlatformClient.resolve()` 目前是 `bilibili if ... else 斗鱼` 的二元三元式 → **需重构成字典分派**并新增 `_huya()` 之类
-4. `core.py:room_number()` 房间号归一化；`settings.py:room_record()` 只接受纯数字 1–15 位
-5. `accounts.py:verify_login()` 登录校验分支
-6. `qr_login.py:login_url()` 扫码入口
-7. `core.py` 的 `Stream.qualities` / `backup_cdns` 备份线路语义要对齐
+平台差异已收敛为声明式注册表 `live_viewer/platforms.py` 的 `PlatformSpec`，不再写平台名分支。
+
+1. `platforms.py` `PLATFORM_SPECS` 增加一项：`key` / `caption` / `referer` / `page_hosts` /
+   `cookie_domains` / `media_domains` / `resolve_method` / `preferred_quality`，以及按需的
+   `import_credentials` / `paste_alias` / `qr_login` / `qr_credentials` / `qr_cancel_url` /
+   `verify_login` / `device_cookie` / `resign_backups` / `topic_query_room` / `max_room_digits`
+2. `core.py` 的 `PlatformClient` 上新增 `resolve_method` 指向的取流方法（接收 `room, requested`）
+3. `REFERERS` / `COOKIE_DOMAINS` / `MEDIA_DOMAINS` / `settings.PLATFORMS` 均由注册表自动派生，
+   **不需要再手改**
+4. 需要登录校验时实现 `login_status()` 分支并把 `verify_login=True`；否则填 `unverified_message`
+5. 无扫码入口就设 `qr_login=False`，`QrLogin` 会先拒绝再建 HTTP 客户端，账号页自动隐藏扫码按钮
+6. `core.py` 的 `Stream.qualities` / `backup_cdns` 备份线路语义要对齐
 
 ### B. 新增播放器后端
 - 实现与 `PotPlayerAdapter` 同形的接口：`prepare / open / stop / pause / resume / seek / poll / snapshot / close`
@@ -266,5 +272,6 @@ VOD / 番剧走同一条 `play()`，只是 `request["kind"]="vod"`（番剧再�
 3. **接口脆弱。** 斗鱼签名（`_douyu_play` 的 MD5 轮数 + auth）和 B 站 `getRoomPlayInfo` 会随平台改版失效，是主要维护点。
 4. **双前端并存。** `live_viewer/app.py`（Tk，1342 行）与 `mpv_player.py` 已冻结但仍随包分发，改动共享模块（`core/relay/settings/events`）时**不能破坏 Tk 路径**，或需明确弃用。
 5. **`LiveRuntime` 偏大（621 行）**，`play()` 与 `tick()` 里交织了重连、VOD 恢复、播放器替换三类逻辑，扩展时优先在新分支里加而不要继续内联膨胀。
-6. **平台分支是 if/else 而非注册表**，加第三个平台会显著增加 `core.py` 与 `runtime.py` 的条件复杂度。
+6. **平台分支已收敛为注册表**（P9-B-1），加平台不再需要改 `core.py` 的分派逻辑；但 `PlatformClient`
+   上仍要手写该平台的取流方法，且 `Stream` / `Quality` 的语义要自己对齐。
 7. **真机验收依赖人工。** 会员资格、音画同步、长时间稳定性、大陆网络均需用户在 PotPlayer 中确认，自动化只能覆盖到“转发与状态”。
