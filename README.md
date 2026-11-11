@@ -1,6 +1,8 @@
 # 本地直播 · Qt / PotPlayer 0.9.0
 
-Windows 桌面观看软件，支持斗鱼和 B 站直播、B 站普通视频与番剧，经本机 RTMP / HTTP 转发交给 PotPlayer。观看时无需打开平台网页，转发保持源流编码；原 Tk 版本另保留内置 libmpv 入口。
+Windows 桌面观看软件，支持斗鱼、B 站与抖音直播、B 站普通视频与番剧，经本机 RTMP / HTTP 转发交给 PotPlayer。观看时无需打开平台网页，转发保持源流编码；原 Tk 版本另保留内置 libmpv 入口。
+
+抖音为 P9 新增：在观看页选择“抖音”，输入 `live.douyin.com/<房间号>` 链接或 12–15 位房间号即可，用法见 [P9 抖音直播](docs/p9-usage.md)，取流可行性证据见 [P9-A 验收](docs/p9a-acceptance.md)。抖音只支持 Cookie 导入，不提供扫码登录。
 
 当前 Qt 版本为 **0.9.0**：P8-B 新增 EP / SS 番剧入口、季度与选集、作品收藏和改名、剧集历史、会员整集资格、实际画质和 EP / cid 续播。保留 BV / AV / 分 P、地址续期、平台字幕、SDR HEVC / AV1、直播五小时回看、扫码、登录记忆、VSR 与统一通知。便携包为 [LiveViewer-0.9.0-win-x64.zip](dist/p8/LiveViewer-0.9.0-win-x64.zip)，完整解压后运行文件夹中的 EXE。用法与验证边界见 [P8 使用说明](docs/p8-usage.md) 和 [P8-B 验收](docs/p8-acceptance.md)。实际画质、整集权限与字幕取决于平台对当前账号和单集的返回；VSR 默认关闭。
 
