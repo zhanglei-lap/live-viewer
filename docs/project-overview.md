@@ -1,10 +1,11 @@
-# 工程总览 · 本地直播 / LiveViewer 0.9.0
+# 工程总览 · 本地直播 / LiveViewer 0.10.0
 
 本文件是对现有代码的现状总结，供新增功能前对照使用。基于源码实际读取，不替代各阶段验收文档。
 
-- 规模：48 个 Python 源文件 / 10807 行；30 个测试文件 / 3930 行；34 篇文档
-- 入口：`qt_main.py`（=`live_viewer.qt.app:main`，版本 0.9.0）；`legacy_main.py`（旧 Tk，0.5.2-p2，已冻结）
-- 无 Git 仓库（`git status` 报 not a repository）
+- 规模：49 个 Python 源文件；31 个测试文件；40 余篇文档（P9 后统计）
+- 入口：`qt_main.py`（=`live_viewer.qt.app:main`，版本 0.10.0）；`legacy_main.py`（旧 Tk，0.5.2-p2，已冻结）
+- 平台：斗鱼、B 站、抖音（抖音为 P9 新增，只支持 Cookie 导入，不支持扫码）
+- 版本控制：Git，基线 `e6197ab`（0.9.0），P9 在 `feature/douyin-live` 分支
 
 ---
 

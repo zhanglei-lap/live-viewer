@@ -34,7 +34,7 @@ from .notifications import NoticeManager
 from .vod_page import VodPage
 from .bangumi_page import BangumiPage
 
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 STATES = {"idle": "准备观看", "resolving": "正在解析直播", "connecting": "正在连接播放器",
           "playing": "正在播放", "paused": "已暂停", "reconnecting": "正在恢复连接",
           "unavailable": "房间未开播", "error": "播放遇到问题", "stopped": "已停止", "ended": "播放完毕"}
