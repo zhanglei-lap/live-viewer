@@ -52,8 +52,10 @@ ENTER_PARAMS = {
 # 抖音直播 FLV 视频编码 ID（FLV VideoTag 首字节低 4 位）。
 CODEC_IDS = {2: "Sorenson H.263", 7: "AVC (H.264)", 12: "HEVC (H.265)"}
 
-# 新结构档位键 → 面向用户的名称。顺序即优先级。
-QUALITY_NAMES = {"origin": "原画", "uhd": "超清", "hd": "高清", "sd": "标清"}
+# 新结构档位键 → 面向用户的名称。数值越大越清晰，order 用于排序与“原画优先”降档。
+# 注意 ao 是纯音频流（resolution 为空、fps 为 0），不能当作可选画质交给播放器。
+QUALITY_NAMES = {"origin": "原画", "uhd": "超清", "hd": "高清", "sd": "标清", "ld": "流畅", "md": "极速", "ao": "纯音频"}
+QUALITY_ORDER = {"origin": 6, "uhd": 5, "hd": 4, "sd": 3, "ld": 2, "md": 1, "ao": 0}
 # 旧结构 flv_pull_url 键。
 LEGACY_QUALITY_NAMES = {"FULL_HD1": "原画", "HD1": "高清", "SD1": "标清", "SD2": "流畅"}
 
@@ -166,8 +168,13 @@ def parse_sdk_params(raw: str) -> dict:
 
 
 def extract_layout(stream_url: dict) -> dict:
-    """同时支持 live_core_sdk_data 新结构与 flv_pull_url 旧结构。"""
-    report = {"layout": None, "qualities": [], "hosts": [], "urls": []}
+    """同时支持 live_core_sdk_data 新结构与 flv_pull_url 旧结构。
+
+    实测房间同时返回两套结构，新结构的档位更全（origin/uhd/hd/sd/ld/md/ao），
+    因此优先解析新结构，旧结构只作为兜底。
+    """
+    report = {"layout": None, "default_resolution": stream_url.get("default_resolution"),
+              "qualities": [], "hosts": [], "urls": []}
     core = stream_url.get("live_core_sdk_data") or {}
     raw = (core.get("pull_data") or {}).get("stream_data")
     if raw:
@@ -181,7 +188,10 @@ def extract_layout(stream_url: dict) -> dict:
             for key, tier in tiers.items():
                 main = (tier or {}).get("main") or {}
                 backup = (tier or {}).get("backup") or {}
+                # 实际字段名是 VCodec / vbitrate（大小写敏感），不是 vCodec / vBitRate。
                 params = parse_sdk_params(main.get("sdk_params") or "")
+                resolution = params.get("resolution") or ""
+                fps = params.get("fps") or 0
                 for stream in (main, backup):
                     for url in (stream.get("flv"), stream.get("hls")):
                         if url:
@@ -192,15 +202,22 @@ def extract_layout(stream_url: dict) -> dict:
                 report["qualities"].append({
                     "key": key,
                     "name": QUALITY_NAMES.get(key, key),
-                    "sdk_key": params.get("sdk_key"),
-                    "vcodec": params.get("vCodec"),
-                    "resolution": params.get("resolution"),
-                    "fps": params.get("fps"),
-                    "vbitrate": params.get("vBitRate"),
+                    "order": QUALITY_ORDER.get(key, 0),
+                    "vcodec": (params.get("VCodec") or "").lower() or None,
+                    "resolution": resolution or None,
+                    "fps": fps or None,
+                    "vbitrate": params.get("vbitrate"),
+                    "dr_type": params.get("drType"),
+                    # 纯音频档位没有分辨率与帧率，交给播放器会得到黑屏。
+                    "audio_only": not resolution or not fps,
                     "has_flv": bool(main.get("flv")),
                     "has_hls": bool(main.get("hls")),
                     "has_backup": bool(backup.get("flv")),
+                    # 仅用于本次采样与拉流，写入报告前由 strip_urls 移除。
+                    "flv_url": main.get("flv"),
+                    "hls_url": main.get("hls"),
                 })
+            report["qualities"].sort(key=lambda q: q["order"], reverse=True)
             return report
     legacy = stream_url.get("flv_pull_url") or {}
     if legacy:
@@ -212,7 +229,7 @@ def extract_layout(stream_url: dict) -> dict:
                 if host and host not in report["hosts"]:
                     report["hosts"].append(host)
             report["qualities"].append({"key": key, "name": LEGACY_QUALITY_NAMES.get(key, key),
-                                        "has_flv": bool(url)})
+                                        "audio_only": False, "has_flv": bool(url)})
         hls = stream_url.get("hls_pull_url_map") or {}
         for url in hls.values():
             if url:
@@ -273,6 +290,15 @@ def flv_probe(session: requests.Session, url: str, seconds: float) -> dict:
     return result
 
 
+def strip_urls(value):
+    """递归移除签名媒体地址，确保证据文件里不含可直接复用的 CDN URL。"""
+    if isinstance(value, dict):
+        return {k: strip_urls(v) for k, v in value.items() if k not in ("flv_url", "hls_url")}
+    if isinstance(value, list):
+        return [strip_urls(item) for item in value]
+    return value
+
+
 def raw_walk(payload: dict) -> dict:
     """取第一个房间的核心字段，供结构记录。"""
     data = payload.get("data") or {}
@@ -321,7 +347,7 @@ def main() -> int:
     print("      →", json.dumps(report["checks"]["ttwid"], ensure_ascii=False), flush=True)
     if not report["checks"]["ttwid"].get("ok"):
         print("!! 未拿到 ttwid，后续步骤无法进行。", flush=True)
-        output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        output.write_text(json.dumps(strip_urls(report), ensure_ascii=False, indent=2), encoding="utf-8")
         return 2
 
     candidates = [rid_from_input(v) for v in args.room]
@@ -378,30 +404,36 @@ def main() -> int:
               f"layout={summary.get('layout')} 档位={[q['key'] for q in layout['qualities']]} "
               f"hosts={layout['hosts']}", flush=True)
         # 只对第一个开播房间做真实拉流，避免产生过多请求
-        if layout["urls"] and not any(r.get("flv") for r in report["rooms"]):
+        if layout["qualities"] and not any(r.get("flv_samples") for r in report["rooms"]):
             print(f"[5/6] 真实拉流采样 {args.seconds}s …", flush=True)
-            probe = None
-            for url in layout["urls"][:4]:
-                if not url.lower().split("?")[0].endswith(".flv"):
+            samples = []
+            seen_codecs = set()
+            for quality in layout["qualities"]:
+                if quality.get("audio_only") or not quality.get("flv_url"):
                     continue
-                result = flv_probe(session, url, args.seconds)
-                result["host"] = host_of(url)
-                result["redacted"] = redact(url)
-                print(f"      {result['host']}: ok={result['ok']} bytes={result['bytes']} "
-                      f"codec={result['codec']} ct={result.get('content_type')}", flush=True)
-                if result.get("ok") and probe is None:
-                    probe = result
-                if result.get("ok"):
+                if quality.get("vcodec") in seen_codecs:
+                    continue  # 每种编码只采样一次，避免对同源流重复请求
+                result = flv_probe(session, quality["flv_url"], args.seconds)
+                result["tier"] = quality["key"]
+                result["api_vcodec"] = quality.get("vcodec")
+                result["host"] = host_of(quality["flv_url"])
+                result["redacted"] = redact(quality["flv_url"])
+                seen_codecs.add(quality.get("vcodec"))
+                samples.append(result)
+                print(f"      tier={quality['key']:<7} host={result['host']} ok={result['ok']} "
+                      f"bytes={result['bytes']} 实测编码={result['codec']} "
+                      f"API编码={quality.get('vcodec')} ct={result.get('content_type')}", flush=True)
+                if len(samples) >= 2:
                     break
-            report["rooms"][-1]["flv"] = probe or {"ok": False}
-            if probe:
+            report["rooms"][-1]["flv_samples"] = samples
+            if any(s.get("ok") for s in samples):
                 break
     report["hosts"] = hosts
 
     minutes = [int(x) for x in args.expiry.split(",") if x.strip().isdigit()]
-    if minutes and any(r.get("flv") for r in report["rooms"]):
+    if minutes and any(r.get("flv_samples") for r in report["rooms"]):
         print(f"[6/6] 地址有效期复测：{minutes} 分钟 …", flush=True)
-        room = next(r for r in report["rooms"] if r.get("flv"))
+        room = next(r for r in report["rooms"] if r.get("flv_samples"))
         rid = room["web_rid_input"]
         expiry = []
         for minutes_ahead in minutes:
@@ -419,12 +451,12 @@ def main() -> int:
         print("[6/6] 跳过有效期复测（未指定 --expiry 或无可用开播房间）。", flush=True)
 
     report["finished_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
-    output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    output.write_text(json.dumps(strip_urls(report), ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n证据已写入：{output}", flush=True)
 
     live = [r for r in report["rooms"] if not r.get("empty") and r.get("layout")]
-    print(f"结论：候选 {len(candidates)} 个，拿到流结构 {len(live)} 个，"
-          f"真实拉流成功 {sum(1 for r in live if (r.get('flv') or {}).get('ok'))} 个")
+    pulled = sum(1 for r in live for s in (r.get("flv_samples") or []) if s.get("ok"))
+    print(f"结论：候选 {len(candidates)} 个，拿到流结构 {len(live)} 个，真实拉流成功 {pulled} 个")
     return 0 if live else 1
 
 
