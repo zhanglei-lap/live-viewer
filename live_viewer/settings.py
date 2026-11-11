@@ -8,7 +8,10 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-PLATFORMS = {"B 站": "bilibili", "斗鱼": "douyu"}
+from .platforms import PLATFORM_SPECS
+
+# 界面显示名 → 内部平台标识，顺序即下拉框与账号卡片的展示顺序。
+PLATFORMS = {spec.caption: spec.key for spec in PLATFORM_SPECS.values()}
 DEFAULT_ROOMS = [
     {"platform": "bilibili", "room": "35", "name": "B 站 · 35"},
     {"platform": "douyu", "room": "6657", "name": "斗鱼 · 6657"},
@@ -40,13 +43,14 @@ def atomic_write(path: Path, payload: bytes):
 def room_record(value) -> dict | None:
     if not isinstance(value, dict) or value.get("platform") not in PLATFORMS.values():
         return None
-    room = str(value.get("room", ""))
-    if not room.isascii() or not room.isdigit() or not 1 <= len(room) <= 15 or int(room) <= 0:
-        return None
     platform = value["platform"]
+    limit = PLATFORM_SPECS[platform].max_room_digits
+    room = str(value.get("room", ""))
+    if not room.isascii() or not room.isdigit() or not 1 <= len(room) <= limit or int(room) <= 0:
+        return None
     name = value.get("name")
     name = name.strip()[:80] if isinstance(name, str) else ""
-    return {"platform": platform, "room": str(int(room)), "name": name or f"{next(k for k, v in PLATFORMS.items() if v == platform)} · {int(room)}"}
+    return {"platform": platform, "room": str(int(room)), "name": name or f"{PLATFORM_SPECS[platform].caption} · {int(room)}"}
 
 
 def sanitize_settings(data) -> dict:

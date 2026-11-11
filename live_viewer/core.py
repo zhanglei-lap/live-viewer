@@ -18,14 +18,13 @@ from urllib.parse import parse_qs, urlparse
 import requests
 
 from .network import configure_session, connection_message, connection_kind
+from .platforms import PLATFORM_SPECS, PlatformSpec, require_spec
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
-REFERERS = {"bilibili": "https://live.bilibili.com/", "douyu": "https://www.douyu.com/"}
-COOKIE_DOMAINS = {"bilibili": ("bilibili.com",), "douyu": ("douyu.com",)}
-MEDIA_DOMAINS = {
-    "bilibili": ("bilivideo.com", "bilivideo.cn"),
-    "douyu": ("douyucdn.cn", "douyucdn2.cn", "douyucdn.com", "douyucdn2.com", "douyu.com", "livehwc4.com", "edgesrv.com"),
-}
+# 平台差异统一由 platforms.PLATFORM_SPECS 声明。这三个名字保留，供 Tk 前端、凭据存储与测试继续使用。
+REFERERS = {key: spec.referer for key, spec in PLATFORM_SPECS.items()}
+COOKIE_DOMAINS = {key: spec.cookie_domains for key, spec in PLATFORM_SPECS.items()}
+MEDIA_DOMAINS = {key: spec.media_domains for key, spec in PLATFORM_SPECS.items()}
 
 
 class ViewerError(Exception):
@@ -42,23 +41,31 @@ def belongs_to(host: str, domains: tuple[str, ...]) -> bool:
 
 
 def room_number(platform: str, value: str) -> str:
+    spec = require_spec(platform)
+    limit = spec.max_room_digits
     value = value.strip()
-    if value.isascii() and value.isdigit() and 0 < len(value) <= 15 and int(value) > 0:
+    if value.isascii() and value.isdigit() and 0 < len(value) <= limit and int(value) > 0:
         return str(int(value))
     parsed = urlparse(value)
-    expected = "live.bilibili.com" if platform == "bilibili" else "douyu.com"
-    if parsed.scheme not in ("http", "https") or not belongs_to(parsed.hostname or "", (expected,)):
+    if parsed.scheme not in ("http", "https") or not belongs_to(parsed.hostname or "", spec.page_hosts):
         raise ViewerError("请输入该平台的房间号或直播间链接。")
     candidate = parsed.path.strip("/").split("/")[0]
-    if platform == "douyu" and parsed.path.startswith("/topic/"):
+    if spec.topic_query_room and parsed.path.startswith("/topic/"):
         candidate = parse_qs(parsed.query).get("rid", [""])[0]
-    if not re.fullmatch(r"[0-9]{1,15}", candidate) or int(candidate) <= 0:
+    if not re.fullmatch(rf"[0-9]{{1,{limit}}}", candidate) or int(candidate) <= 0:
         raise ViewerError("目前仅支持数字房间号，请从直播间链接中确认房间号。")
     return str(int(candidate))
 
 
+def missing_credentials(spec: PlatformSpec, jar) -> str:
+    """返回该平台必需的、但 jar 中缺失的 cookie 名；空串表示齐全。"""
+    return "、".join(name for name in spec.import_credentials
+                     if not any(c.name == name and c.value for c in jar))
+
+
 def load_cookies(path: str | Path, platform: str) -> requests.cookies.RequestsCookieJar:
     """Read only the selected platform's cookies; never persist the file or its path."""
+    spec = require_spec(platform)
     path = Path(path)
     database_message = "这是 Edge/Chrome 的 Cookie 数据库，不能直接作为文本导入。请使用“粘贴 Cookie”，或导出 Netscape 格式文件；修改后缀无效。"
     try:
@@ -79,24 +86,26 @@ def load_cookies(path: str | Path, platform: str) -> requests.cookies.RequestsCo
     for cookie in source:
         if cookie.expires == 0:
             cookie.expires = None  # Common Netscape exporters use 0 for session cookies.
-        if belongs_to(cookie.domain, COOKIE_DOMAINS[platform]) and not cookie.is_expired():
+        if belongs_to(cookie.domain, spec.cookie_domains) and not cookie.is_expired():
             result.set_cookie(copy.copy(cookie))
     if not result:
         raise ViewerError("文件中没有该平台未过期的 Cookie。")
-    if platform == "bilibili" and not any(c.name == "SESSDATA" and c.value for c in result):
-        raise ViewerError("文件中缺少 B 站 SESSDATA 登录凭据，请在登录后重新导出。")
+    missing = missing_credentials(spec, result)
+    if missing:
+        raise ViewerError(f"文件中缺少 {spec.caption} {missing} 登录凭据，请在登录后重新导出。")
     return result
 
 
 def cookies_from_text(text: str, platform: str) -> requests.cookies.RequestsCookieJar:
     """Import a user-pasted Cookie header into a platform-scoped, memory-only jar."""
+    spec = require_spec(platform)
     text = text.strip()
     if text.lower().startswith("cookie:"):
         text = text[7:].strip()
     if not text or len(text) > 65536 or any(c in text for c in ("\r", "\n", "\x00")):
         raise ViewerError("请输入单行 Cookie 内容。")
-    if platform == "bilibili" and ";" not in text and "=" not in text:
-        text = "SESSDATA=" + text
+    if spec.paste_alias and ";" not in text and "=" not in text:
+        text = spec.paste_alias + "=" + text
     jar = requests.cookies.RequestsCookieJar()
     for pair in text.split(";"):
         pair = pair.strip()
@@ -104,10 +113,12 @@ def cookies_from_text(text: str, platform: str) -> requests.cookies.RequestsCook
             continue
         name, separator, value = pair.partition("=")
         if not separator or not re.fullmatch(r"[A-Za-z0-9_!#$%&'*+.^`|~-]+", name):
-            raise ViewerError("格式应为 name=value; name2=value2。B 站也可只粘贴 SESSDATA 的值。")
-        jar.set(name, value, domain="." + COOKIE_DOMAINS[platform][0], path="/", secure=True)
-    if platform == "bilibili" and not any(c.name == "SESSDATA" and c.value for c in jar):
-        raise ViewerError("粘贴内容中缺少 SESSDATA 登录凭据。")
+            hint = f"{spec.caption}也可只粘贴 {spec.paste_alias} 的值。" if spec.paste_alias else ""
+            raise ViewerError(f"格式应为 name=value; name2=value2。{hint}")
+        jar.set(name, value, domain="." + spec.cookie_domains[0], path="/", secure=True)
+    missing = missing_credentials(spec, jar)
+    if missing:
+        raise ViewerError(f"粘贴内容中缺少 {missing} 登录凭据。")
     if not any(c.value for c in jar):
         raise ViewerError("Cookie 内容为空。")
     return jar
@@ -218,14 +229,15 @@ def parse_douyu_room(page: str, requested_room: str) -> DouyuRoom:
 
 class PlatformClient:
     def __init__(self, platform: str, cookies=None, *, network_mode="direct"):
-        if platform not in REFERERS:
-            raise ViewerError("不支持的平台。")
-        self.platform = platform
+        spec = require_spec(platform)
+        self.platform, self.spec = platform, spec
         self.session = new_session(cookies, network_mode=network_mode)
-        self.session.headers["Referer"] = REFERERS[platform]
-        self.did = next((c.value for c in self.session.cookies if c.name == "dy_did"), uuid.uuid4().hex)
-        if platform == "douyu":
-            self.session.cookies.set("dy_did", self.did, domain=".douyu.com", path="/")
+        self.session.headers["Referer"] = spec.referer
+        device = spec.device_cookie or "dy_did"
+        self.did = next((c.value for c in self.session.cookies if c.name == device), uuid.uuid4().hex)
+        if spec.device_cookie:
+            self.session.cookies.set(spec.device_cookie, self.did,
+                                     domain="." + spec.cookie_domains[0], path="/")
 
     def close(self):
         self.session.close()
@@ -245,16 +257,20 @@ class PlatformClient:
             raise ViewerError("平台接口返回格式发生变化，请稍后重试。") from None
 
     def login_status(self) -> dict:
-        if self.platform == "bilibili":
+        if self.spec.verify_login:
             data, _ = self._api("https://api.bilibili.com/x/web-interface/nav")
             valid = data.get("code") == 0 and data.get("data", {}).get("isLogin") is True
-            return {"verified": valid, "message": "B 站登录状态有效" if valid else "B 站登录状态无效或已过期"}
-        # No verified Douyu identity endpoint has been established by this investigation.
-        return {"verified": None, "message": "斗鱼 Cookie 已导入；账号有效性尚未单独验证"}
+            suffix = "有效" if valid else "无效或已过期"
+            return {"verified": valid, "message": f"{self.spec.caption}登录状态{suffix}"}
+        # 平台没有可用的身份校验接口时明确返回 None，界面据此不显示“已验证”。
+        return {"verified": None, "message": self.spec.unverified_message}
 
     def resolve(self, room: str, requested: int | None = None) -> Stream:
+        resolver = getattr(self, self.spec.resolve_method, None)
+        if resolver is None:
+            raise ViewerError("该平台的取流实现缺失。", code="platform.unimplemented")
         try:
-            return self._bilibili(room, 10000 if requested is None else requested) if self.platform == "bilibili" else self._douyu(room, 0 if requested is None else requested)
+            return resolver(room, self.spec.preferred_quality if requested is None else requested)
         except (KeyError, TypeError, IndexError, ValueError, OverflowError):
             raise ViewerError("平台返回的数据不完整或格式已变化。") from None
 
@@ -358,7 +374,7 @@ class PlatformClient:
     def media_urls(self, stream: Stream, *, on_event=None):
         """Resolve backup CDNs lazily, only after previous media opens fail."""
         yield from stream.urls
-        if stream.platform != "douyu":
+        if not self.spec.resign_backups:
             return
         seen = set(stream.urls)
         for cdn in stream.backup_cdns:

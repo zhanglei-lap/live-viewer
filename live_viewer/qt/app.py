@@ -24,6 +24,7 @@ from ..accounts import CredentialWriter, verify_login
 from ..events import EventCenter, LEVELS, safe_text
 from ..reports import connection_check, compare_quality, save_diagnostic_report, clean, REPORT
 from ..network import NETWORK_MODES
+from ..platforms import PLATFORM_SPECS
 from ..runtime import LiveRuntime
 from ..settings import PLATFORMS, StateStore
 from .logs import LogFilter, LogModel, SOURCES
@@ -283,14 +284,17 @@ class ViewerWindow(QMainWindow):
         self.remember_boxes = {}
         self.account_check_buttons = {}
         for caption, platform in PLATFORMS.items():
+            spec = PLATFORM_SPECS[platform]
             frame, box = card(caption)
             label = text("未登录 · 可匿名观看", "StatusContext", True)
             self.account_status[platform] = label
             box.addWidget(label)
-            box.addLayout(row(button("扫码登录", lambda p=platform: self.qr_login(p), "Primary"),
-                              button("导入 Cookie", lambda p=platform: self.import_cookie(p)),
-                              button("粘贴 Cookie", lambda p=platform: self.paste_cookie(p)),
-                              button("清除登录", lambda p=platform: self.clear_login(p))))
+            actions = row(button("导入 Cookie", lambda p=platform: self.import_cookie(p)),
+                          button("粘贴 Cookie", lambda p=platform: self.paste_cookie(p)),
+                          button("清除登录", lambda p=platform: self.clear_login(p)))
+            if spec.qr_login:
+                actions.insertWidget(0, button("扫码登录", lambda p=platform: self.qr_login(p), "Primary"))
+            box.addLayout(actions)
             remembered = QCheckBox("记住此平台登录（Windows 当前用户加密）")
             remembered.setChecked(self.config["remember_login"][platform])
             remembered.toggled.connect(lambda enabled, p=platform: self.toggle_remember_login(p, enabled))
@@ -299,8 +303,14 @@ class ViewerWindow(QMainWindow):
             check = button("检查登录状态", lambda p=platform: self.check_login(p))
             self.account_check_buttons[platform] = check
             box.addWidget(check)
-            box.addWidget(text("关闭记忆会删除已保存登录，本次会话仍可使用。B 站可验证登录；斗鱼有效性尚未独立验证。",
-                               "Muted", True))
+            verified = "、".join(s.caption for s in PLATFORM_SPECS.values() if s.verify_login)
+            unverified = "、".join(s.caption for s in PLATFORM_SPECS.values() if not s.verify_login)
+            hint = "关闭记忆会删除已保存登录，本次会话仍可使用。"
+            if verified:
+                hint += f"{verified}可验证登录；"
+            if unverified:
+                hint += f"{unverified}有效性尚未独立验证。"
+            box.addWidget(text(hint, "Muted", True))
             layout.addWidget(frame)
         layout.addStretch()
         return scroll
@@ -1282,7 +1292,7 @@ def main():
     parser.add_argument("--probe-video", default="BV17x411w7KC")
     parser.add_argument("--probe-vod-pause-seconds", type=int, default=60)
     parser.add_argument("--probe-player", type=Path, default=Path(r"D:\potplayer\PotPlayerMini64.exe"))
-    parser.add_argument("--probe-platform", choices=("douyu", "bilibili"), default="douyu")
+    parser.add_argument("--probe-platform", choices=tuple(PLATFORM_SPECS), default="douyu")
     parser.add_argument("--probe-room", default="6657")
     args = parser.parse_args()
     if (args.probe_p8_member or args.probe_p8_full) and not args.probe_p8:
