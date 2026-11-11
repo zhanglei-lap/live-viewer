@@ -107,9 +107,11 @@ PLATFORM_SPECS: dict[str, PlatformSpec] = {
         # 只接受直播页域名；分享短链 v.douyin.com 需要跟随跳转，本版不支持。
         page_hosts=("live.douyin.com",),
         cookie_domains=("douyin.com",),
-        # 实测 FLV 主机形如 pull-flv-l13[-admin].douyincdn.com，段位随房间变化，
-        # 因此按后缀匹配，不写死完整主机名。
-        media_domains=("douyincdn.com",),
+        # 实测 FLV 主机有两种后缀，段位（q13 / f11 / admin）随房间与调度变化，
+        # 因此按域名后缀匹配，不写死完整主机名：
+        #   pull-flv-l13.douyincdn.com / pull-flv-q13.douyincdn.com / …-admin.douyincdn.com
+        #   pull-flv-f11.douyinliving.com / pull-flv-f11-admin.douyinliving.com
+        media_domains=("douyincdn.com", "douyinliving.com"),
         resolve_method="_douyin",
         # 档位是字符串（origin/uhd/hd/sd/ld/md），这里用与 core.DOUYIN_TIERS 一致的数值。
         preferred_quality=6,

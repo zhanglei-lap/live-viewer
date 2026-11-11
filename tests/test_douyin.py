@@ -207,6 +207,23 @@ class DouyinRegistrationTests(unittest.TestCase):
         self.assertEqual(sorted(DOUYIN_TIERS.values(), reverse=True),
                          [(6, "原画"), (5, "超清"), (4, "高清"), (3, "标清"), (2, "流畅"), (1, "极速")])
 
+    def test_observed_cdn_hosts_pass_the_media_whitelist(self):
+        """两个后缀都是实测见过的真实主机；只放其中一个会误拒备用线路。"""
+        from live_viewer.core import validate_media_url
+        for url in ("https://pull-flv-l13.douyincdn.com/third/stream-1_or4.flv?sig=1",
+                    "https://pull-flv-q13-admin.douyincdn.com/third/stream-1_hd.flv?sig=1",
+                    "https://pull-flv-f11.douyinliving.com/third/stream-1_or4.flv?sig=1",
+                    "https://pull-flv-f11-admin.douyinliving.com/third/stream-1_hd.flv?sig=1"):
+            validate_media_url(url, "douyin")
+
+    def test_unrelated_hosts_are_still_rejected(self):
+        from live_viewer.core import validate_media_url
+        for url in ("https://evil.example.com/stream.flv",
+                    "https://notdouyincdn.com/stream.flv",
+                    "https://douyincdn.com.evil.example.com/stream.flv"):
+            with self.assertRaises(ViewerError):
+                validate_media_url(url, "douyin")
+
 
 if __name__ == "__main__":
     unittest.main()

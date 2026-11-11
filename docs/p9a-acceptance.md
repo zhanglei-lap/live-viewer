@@ -4,24 +4,41 @@
 
 ## 当前结论
 
-**API 层门禁通过。** 未登录仅凭 `ttwid` 即可稳定取得抖音直播的 HTTP-FLV 地址，
-无需 `a_bogus` 签名；真实拉流返回合法 FLV 与 AVC 序列头；同一签名地址连续 60 分钟可用。
-
-已完成验证的样本只有一个房间，因此「至少 2 个房间」的门禁项尚未满足，
-需要再补 1–2 个不同主播 / 不同档位的房间后才能宣告 P9-A 完全通过。
+**门禁全部通过。** 未登录仅凭 `ttwid` 即可稳定取得抖音直播的 HTTP-FLV 地址，
+无需 `a_bogus` 签名；真实拉流返回合法 FLV 与 AVC 序列头；同一签名地址连续 60 分钟可用；
+三个不同直播间结构一致，均能实拉到 H.264 FLV。
 
 ## 样本
 
-| 项目 | 值 |
-|---|---|
-| 房间 | `https://live.douyin.com/67876457927` |
-| 主播 / 标题 | 玩机器CSGO / 玩机器CSGO正在直播 |
-| 房间状态 | `status=2`（直播中） |
-| 在线人数 | 7w+ |
-| 调用成功率 | 20/20 与 10/10 两轮，`status_code` 全为 0 |
-| HTTP 444 次数 | 0 |
-| 单次耗时 | 305–365 ms |
-| 响应体 | 约 605–665 KB |
+三个房间由用户在不同时间提供，均为真实开播状态。
+
+| 房间 | 标题 | 在线 | 结构与档位 | 编码 | 调用成功率 | 真实拉流 |
+|---|---|---|---|---|---|---|
+| `67876457927` | 玩机器CSGO正在直播 | 7w+ | 7 档，`live_core_sdk_data` | h264 | 20/20 + 10/10 | `origin` 通过 |
+| `335610475439` | 刘回杯 / 陈泽杯 冠军 | 2w+ | 7 档，`live_core_sdk_data` | h264 | 8/8 | `uhd` 通过 |
+| `480446788139` | 海南-临高 | 12w+ | 7 档，`live_core_sdk_data` | h264 | 通过 | 未单独采样（结构已确认） |
+
+三房间的档位集合完全一致：`origin` / `uhd` / `hd` / `sd` / `ld` / `md` / `ao`。
+单次调用耗时 305–580 ms，`status_code` 全为 0，**HTTP 444 零次**。
+
+## CDN 主机
+
+三个房间共出现两种域名后缀：
+
+| 主机 | 出现房间 | 用途 |
+|---|---|---|
+| `pull-flv-l13.douyincdn.com` | 房间 1 | FLV |
+| `pull-flv-q13.douyincdn.com` | 房间 2 | FLV |
+| `pull-flv-q13-admin.douyincdn.com` | 房间 2 | FLV（`md` 档位） |
+| `pull-flv-f11.douyinliving.com` | 房间 2 | FLV（备用） |
+| `pull-flv-f11-admin.douyinliving.com` | 房间 2 | FLV |
+| `pull-hls-*.douyincdn.com` / `*.douyinliving.com` | 各房间 | HLS |
+
+主机名里的 `l13` / `q13` / `f11` 与 `admin` 段随房间和调度变化，**必须按域名后缀
+`douyincdn.com` 与 `douyinliving.com` 匹配**。
+
+> 这一条是多房间验证的直接收益：最初只登记了 `douyincdn.com`，房间 2 的
+> `douyinliving.com` 备用线路会被媒体地址白名单误拒。已在 `platforms.py` 补上并加测试。
 
 ## 流结构
 
@@ -52,18 +69,8 @@
 - `ao` 是纯音频流，`resolution` 为空、`fps` 为 0，**不能当作可选画质交给播放器**，否则黑屏。
 - `hd` 与 `sd` 同为 1280×720@30 但码率不同（4 Mbps vs 2 Mbps），排序必须按码率而不是分辨率。
 - 本房间所有档位都是 h264；其他房间可能提供 h265，实现时按 `VCodec` 过滤而非假设。
-- 本房间各档位的 `backup` 均为空，即同一档位只有一个 FLV 主机，没有同档冗余。
-
-## CDN 主机
-
-| 主机 | 用途 |
-|---|---|
-| `pull-flv-l13.douyincdn.com` | FLV |
-| `pull-hls-l13.douyincdn.com` | HLS |
-| `pull-flv-l13-admin.douyincdn.com` | FLV（`md` 档位） |
-
-主机名中的 `l13` 与 `admin` 段会随房间 / 调度变化，**白名单必须按后缀
-`douyincdn.com` 匹配，不能写死完整主机名**。
+- 本房间各档位的 `backup` 均为空，即同一档位只有一个 FLV 主机，没有同档冗余；
+  房间 2 出现了带备用主机的档位，其主机落在 `douyinliving.com` 后缀下。
 
 ## 真实拉流
 
@@ -103,17 +110,20 @@
 
 ## 未覆盖项
 
-- **多房间样本**：仅 1 个房间，无法证明所有房间都有 `origin` / 都是 h264 / 都有新结构。
-- **PotPlayer 实播**：探针只证明能拉到合法 FLV，未经过专用 PotPlayer 播放、暂停、时移与断开重连。
-- **原生时移**：`native_replay` 走本地 RTMP 转发，未验证抖音流在该链路下的暂停与回看行为。
+- **PotPlayer 实播**：三个房间中只有房间 1 完成过真人实播确认（画面、声音、
+  音画同步、暂停、全屏、进度条拖动）；房间 2 / 3 只做到取流层。
+- **原生时移**：房间 1 已验证回看与拖动可用；房间 2 / 3 未测。
 - **登录 Cookie 是否提高成功率**：目前匿名即可，未测试带 Cookie 会话。
+- **低延迟协议**：`lls` 为 WebRTC，未纳入本工具；迁移评估见
+  [lls 迁移评估](p9b-lls-assessment.md)。
 
 ## 对 P9-B 的推论
 
-1. `MEDIA_DOMAINS` 加 `douyincdn.com`（后缀匹配），不要写死主机名。
+1. `MEDIA_DOMAINS` 加 `douyincdn.com` 与 `douyinliving.com`（后缀匹配），不要写死主机名。
 2. 解析以 `live_core_sdk_data` 为主、`flv_pull_url` 兜底。
 3. 档位排序按 `vbitrate`，`ao` 必须排除。
 4. 按 `VCodec` 过滤，优先 `h264`。
 5. 无需签名，仅需 `ttwid`；会话需要 Referer `https://live.douyin.com/`。
-6. 无需备用线路重签（`backup` 为空），失败走「重连时重新解析」。
+6. 备用主机直接并入候选地址轮换，不需要重签名（与斗鱼的 `backup_cdns` 不是一回事）；
+   最终失败走「重连时重新解析」。
 7. 不支持扫码登录，只支持 Cookie 导入 / 粘贴。
