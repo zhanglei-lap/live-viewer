@@ -39,20 +39,22 @@ def median(values):
     return round(statistics.median(values), 3) if values else None
 
 
-def run_once(platform, room, requested, player_path, directory, *, replay, seconds, warmup):
+def run_once(platform, room, requested, player_path, directory, *, replay, seconds, warmup,
+             replay_minutes=300):
     events = []
     client = PlatformClient(platform)
     http_endpoint = RelayEndpoint()
     rtmp_endpoint = RtmpEndpoint() if replay else None
     adapter = PotPlayerAdapter(directory, player_path, hidden=True)
     relay = None
-    label = "原生时移开（本地 RTMP）" if replay else "原生时移关（直连 HTTP-FLV）"
+    label = ("原生时移开（本地 RTMP，" + str(replay_minutes) + " 分钟）" if replay
+             else "原生时移关（直连 HTTP-FLV）")
     print(f"\n=== {label} ===", flush=True)
     try:
         stream = client.resolve(room, requested)
         print(f"档位：请求 {requested} -> 实际 {stream.actual} {stream.actual_name} "
               f"| 编码 {stream.codec} | {len(stream.urls)} 个地址", flush=True)
-        adapter.prepare(replay=replay, replay_minutes=300, vsr=False)
+        adapter.prepare(replay=replay, replay_minutes=replay_minutes, vsr=False)
         common = dict(low_latency=True, network_mode="direct", initial_client=client,
                       initial_stream=stream, endpoint=http_endpoint,
                       on_event=lambda code, message, **_: events.append(code))
@@ -154,6 +156,8 @@ def main() -> int:
     parser.add_argument("--seconds", type=int, default=30)
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--only", choices=("replay", "direct"), help="只测一种链路")
+    parser.add_argument("--replay-minutes", type=int, default=300,
+                        help="时移缓冲长度（对应设置里的最长回看范围，10-300）")
     parser.add_argument("--output", type=Path, default=ROOT / ".research/latency-probe.json")
     args = parser.parse_args()
 
@@ -167,7 +171,8 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="latency-", dir=ROOT / ".research") as temporary:
             report["runs"].append(run_once(args.platform, args.room, args.quality, args.player,
                                            Path(temporary), replay=replay,
-                                           seconds=args.seconds, warmup=args.warmup))
+                                           seconds=args.seconds, warmup=args.warmup,
+                                           replay_minutes=args.replay_minutes))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
