@@ -1,14 +1,18 @@
-# 本地直播 · Qt / PotPlayer 0.9.0
+# 本地直播 · Qt / PotPlayer 0.10.0
 
-Windows 桌面观看软件，支持斗鱼和 B 站直播、B 站普通视频与番剧，经本机 RTMP / HTTP 转发交给 PotPlayer。观看时无需打开平台网页，转发保持源流编码；原 Tk 版本另保留内置 libmpv 入口。
+Windows 桌面观看软件，支持斗鱼、B 站与抖音直播、B 站普通视频与番剧，经本机 RTMP / HTTP 转发交给 PotPlayer。观看时无需打开平台网页，转发保持源流编码；原 Tk 版本另保留内置 libmpv 入口。
 
-当前 Qt 版本为 **0.9.0**：P8-B 新增 EP / SS 番剧入口、季度与选集、作品收藏和改名、剧集历史、会员整集资格、实际画质和 EP / cid 续播。保留 BV / AV / 分 P、地址续期、平台字幕、SDR HEVC / AV1、直播五小时回看、扫码、登录记忆、VSR 与统一通知。便携包为 [LiveViewer-0.9.0-win-x64.zip](dist/p8/LiveViewer-0.9.0-win-x64.zip)，完整解压后运行文件夹中的 EXE。用法与验证边界见 [P8 使用说明](docs/p8-usage.md) 和 [P8-B 验收](docs/p8-acceptance.md)。实际画质、整集权限与字幕取决于平台对当前账号和单集的返回；VSR 默认关闭。
+抖音为 P9 新增：在观看页选择“抖音”，输入 `live.douyin.com/<房间号>` 链接或 12–15 位房间号即可，用法见 [P9 抖音直播](docs/p9-usage.md)，取流可行性证据见 [P9-A 验收](docs/p9a-acceptance.md)。抖音只支持 Cookie 导入，不提供扫码登录。
 
-默认 main.py、qt_main.py 和启动脚本使用 Qt，依赖 requirements.txt；Build-Live-Viewer.cmd / tools/build-p8.py 构建当前版本。Tk 入口为 legacy_main.py，之前的便携包保留。阶段交付、统一日志与通知规则见 [开发路线规划](docs/roadmap-qt-potplayer.md)。以下“启动”及后续章节保留 0.5.0 的历史功能说明，当前 Qt 支持范围以 P8 使用说明为准。源码启动 Qt 可执行 `python qt_main.py`；双击 Start-Live-Viewer.cmd 也启动当前 Qt 版本。
+当前 Qt 版本为 **0.10.0**（P9）：在 0.9.0 的番剧、普通视频与直播能力之上加入抖音直播，并把平台差异收敛为声明式注册表，新增平台不再需要改界面代码。便携包为 [LiveViewer-0.10.0-win-x64.zip](dist/p9/LiveViewer-0.10.0-win-x64.zip)，完整解压后运行文件夹中的 EXE。P9 范围与验证边界见 [P9 验收](docs/p9-acceptance.md)；番剧能力沿用 [P8 使用说明](docs/p8-usage.md) 与 [P8-B 验收](docs/p8-acceptance.md)。
 
-另提供 [0.9.0 单文件 EXE](dist/p8-single/LiveViewer-0.9.0-single.exe)，只复制它即可启动，不需要外置 runtime 或安装 Python；PotPlayer 仍需安装。构建入口为 Build-Single-EXE.cmd，使用和数据迁移见 [单文件版说明](docs/p8-single-usage.md)。文件夹版保持原样，其 EXE 必须和完整 runtime 一起复制。
+默认 main.py、qt_main.py 和启动脚本使用 Qt，依赖 requirements.txt；Build-Live-Viewer.cmd / tools/build-p9.py 构建当前版本。Tk 入口为 legacy_main.py，之前的便携包保留。阶段交付、统一日志与通知规则见 [开发路线规划](docs/roadmap-qt-potplayer.md)。以下“启动”及后续章节保留 0.5.0 的历史功能说明，当前 Qt 支持范围以 P9 使用说明为准。源码启动 Qt 可执行 `python qt_main.py`；双击 Start-Live-Viewer.cmd 也启动当前 Qt 版本。
 
-番剧阶段按 [P8 开发计划](docs/p8-bangumi-plan.md) 完成：P8-A 的 EP 解析、代理隔离、高清对比与整集可行性通过；P8-B 已在正式 EXE 验证三部 × 两集会员实播、完整首集、切集、暂停恢复、续期及清理，用户确认内容与音画正常。296 项自动检查、三档高 DPI 与普通视频回归通过。独立 P8-A 工具及 0.8.0 稳定包保留。升级时先退出程序，把旧便携目录的 data 文件夹复制到新 EXE 旁并保留原目录。
+另提供 [0.10.0 单文件 EXE](dist/p9-single/LiveViewer-0.10.0-single.exe)，只复制它即可启动，不需要外置 runtime 或安装 Python；PotPlayer 仍需安装。构建入口为 Build-Single-EXE.cmd，使用和数据迁移见 [单文件版说明](docs/p9-single-usage.md)。文件夹版保持原样，其 EXE 必须和完整 runtime 一起复制。
+
+P9 分两个阶段：P9-A 用独立只读探针在三个真实开播房间验证抖音取流（20/20、10/10、8/8 成功，HTTP 444 零次，无需 `a_bogus` 签名）；P9-B 完成平台注册表、抖音取流、CDN 白名单与文档。抖音的 3 秒延迟已定位为 PotPlayer 内部缓冲而非转发缺陷，见 [延迟调查](docs/p9-latency-2026-11-11.md)；低延迟协议 `lls` 实测为 WebRTC，[迁移评估](docs/p9b-lls-assessment.md) 结论是暂不实施。332 项自动检查、三档高 DPI 通过，用户确认抖音实播画面与声音正常。升级时先退出程序，把旧便携目录的 data 文件夹复制到新 EXE 旁并保留原目录。
+
+番剧阶段按 [P8 开发计划](docs/p8-bangumi-plan.md) 完成：P8-A 的 EP 解析、代理隔离、高清对比与整集可行性通过；P8-B 已在正式 EXE 验证三部 × 两集会员实播、完整首集、切集、暂停恢复、续期及清理，用户确认内容与音画正常。296 项自动检查、三档高 DPI 与普通视频回归通过。独立 P8-A 工具及 0.8.0 稳定包保留。
 
 P0 原生 Qt 交互原型已完成：便携包在 dist/p0/LiveViewer-P0-win-x64.zip，使用说明见 [原型入口](prototypes/p0/README.md)，设计与验收见 [P0 规范](docs/p0/design-spec.md)。原型使用演示数据；正式业务接入按后续阶段推进。
 

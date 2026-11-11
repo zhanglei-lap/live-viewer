@@ -18,14 +18,13 @@ from urllib.parse import parse_qs, urlparse
 import requests
 
 from .network import configure_session, connection_message, connection_kind
+from .platforms import PLATFORM_SPECS, PlatformSpec, require_spec
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
-REFERERS = {"bilibili": "https://live.bilibili.com/", "douyu": "https://www.douyu.com/"}
-COOKIE_DOMAINS = {"bilibili": ("bilibili.com",), "douyu": ("douyu.com",)}
-MEDIA_DOMAINS = {
-    "bilibili": ("bilivideo.com", "bilivideo.cn"),
-    "douyu": ("douyucdn.cn", "douyucdn2.cn", "douyucdn.com", "douyucdn2.com", "douyu.com", "livehwc4.com", "edgesrv.com"),
-}
+# 平台差异统一由 platforms.PLATFORM_SPECS 声明。这三个名字保留，供 Tk 前端、凭据存储与测试继续使用。
+REFERERS = {key: spec.referer for key, spec in PLATFORM_SPECS.items()}
+COOKIE_DOMAINS = {key: spec.cookie_domains for key, spec in PLATFORM_SPECS.items()}
+MEDIA_DOMAINS = {key: spec.media_domains for key, spec in PLATFORM_SPECS.items()}
 
 
 class ViewerError(Exception):
@@ -42,23 +41,31 @@ def belongs_to(host: str, domains: tuple[str, ...]) -> bool:
 
 
 def room_number(platform: str, value: str) -> str:
+    spec = require_spec(platform)
+    limit = spec.max_room_digits
     value = value.strip()
-    if value.isascii() and value.isdigit() and 0 < len(value) <= 15 and int(value) > 0:
+    if value.isascii() and value.isdigit() and 0 < len(value) <= limit and int(value) > 0:
         return str(int(value))
     parsed = urlparse(value)
-    expected = "live.bilibili.com" if platform == "bilibili" else "douyu.com"
-    if parsed.scheme not in ("http", "https") or not belongs_to(parsed.hostname or "", (expected,)):
+    if parsed.scheme not in ("http", "https") or not belongs_to(parsed.hostname or "", spec.page_hosts):
         raise ViewerError("请输入该平台的房间号或直播间链接。")
     candidate = parsed.path.strip("/").split("/")[0]
-    if platform == "douyu" and parsed.path.startswith("/topic/"):
+    if spec.topic_query_room and parsed.path.startswith("/topic/"):
         candidate = parse_qs(parsed.query).get("rid", [""])[0]
-    if not re.fullmatch(r"[0-9]{1,15}", candidate) or int(candidate) <= 0:
+    if not re.fullmatch(rf"[0-9]{{1,{limit}}}", candidate) or int(candidate) <= 0:
         raise ViewerError("目前仅支持数字房间号，请从直播间链接中确认房间号。")
     return str(int(candidate))
 
 
+def missing_credentials(spec: PlatformSpec, jar) -> str:
+    """返回该平台必需的、但 jar 中缺失的 cookie 名；空串表示齐全。"""
+    return "、".join(name for name in spec.import_credentials
+                     if not any(c.name == name and c.value for c in jar))
+
+
 def load_cookies(path: str | Path, platform: str) -> requests.cookies.RequestsCookieJar:
     """Read only the selected platform's cookies; never persist the file or its path."""
+    spec = require_spec(platform)
     path = Path(path)
     database_message = "这是 Edge/Chrome 的 Cookie 数据库，不能直接作为文本导入。请使用“粘贴 Cookie”，或导出 Netscape 格式文件；修改后缀无效。"
     try:
@@ -79,24 +86,26 @@ def load_cookies(path: str | Path, platform: str) -> requests.cookies.RequestsCo
     for cookie in source:
         if cookie.expires == 0:
             cookie.expires = None  # Common Netscape exporters use 0 for session cookies.
-        if belongs_to(cookie.domain, COOKIE_DOMAINS[platform]) and not cookie.is_expired():
+        if belongs_to(cookie.domain, spec.cookie_domains) and not cookie.is_expired():
             result.set_cookie(copy.copy(cookie))
     if not result:
         raise ViewerError("文件中没有该平台未过期的 Cookie。")
-    if platform == "bilibili" and not any(c.name == "SESSDATA" and c.value for c in result):
-        raise ViewerError("文件中缺少 B 站 SESSDATA 登录凭据，请在登录后重新导出。")
+    missing = missing_credentials(spec, result)
+    if missing:
+        raise ViewerError(f"文件中缺少 {spec.caption} {missing} 登录凭据，请在登录后重新导出。")
     return result
 
 
 def cookies_from_text(text: str, platform: str) -> requests.cookies.RequestsCookieJar:
     """Import a user-pasted Cookie header into a platform-scoped, memory-only jar."""
+    spec = require_spec(platform)
     text = text.strip()
     if text.lower().startswith("cookie:"):
         text = text[7:].strip()
     if not text or len(text) > 65536 or any(c in text for c in ("\r", "\n", "\x00")):
         raise ViewerError("请输入单行 Cookie 内容。")
-    if platform == "bilibili" and ";" not in text and "=" not in text:
-        text = "SESSDATA=" + text
+    if spec.paste_alias and ";" not in text and "=" not in text:
+        text = spec.paste_alias + "=" + text
     jar = requests.cookies.RequestsCookieJar()
     for pair in text.split(";"):
         pair = pair.strip()
@@ -104,10 +113,12 @@ def cookies_from_text(text: str, platform: str) -> requests.cookies.RequestsCook
             continue
         name, separator, value = pair.partition("=")
         if not separator or not re.fullmatch(r"[A-Za-z0-9_!#$%&'*+.^`|~-]+", name):
-            raise ViewerError("格式应为 name=value; name2=value2。B 站也可只粘贴 SESSDATA 的值。")
-        jar.set(name, value, domain="." + COOKIE_DOMAINS[platform][0], path="/", secure=True)
-    if platform == "bilibili" and not any(c.name == "SESSDATA" and c.value for c in jar):
-        raise ViewerError("粘贴内容中缺少 SESSDATA 登录凭据。")
+            hint = f"{spec.caption}也可只粘贴 {spec.paste_alias} 的值。" if spec.paste_alias else ""
+            raise ViewerError(f"格式应为 name=value; name2=value2。{hint}")
+        jar.set(name, value, domain="." + spec.cookie_domains[0], path="/", secure=True)
+    missing = missing_credentials(spec, jar)
+    if missing:
+        raise ViewerError(f"粘贴内容中缺少 {missing} 登录凭据。")
     if not any(c.value for c in jar):
         raise ViewerError("Cookie 内容为空。")
     return jar
@@ -140,13 +151,14 @@ class Stream:
     urls: list[str] = field(repr=False)
     nominal_kbps: int | None = None
     backup_cdns: list[str] = field(default_factory=list, repr=False)
+    codec: str = "AVC"
 
     def summary(self) -> dict:
         return {
             "platform": self.platform, "room": self.room,
             "requested": self.requested, "actual": self.actual,
             "actual_name": self.actual_name, "different_from_request": self.requested != self.actual,
-            "nominal_kbps": self.nominal_kbps, "format": "HTTP-FLV", "codec_requested": "AVC",
+            "nominal_kbps": self.nominal_kbps, "format": "HTTP-FLV", "codec_requested": self.codec,
             "cdn_candidates": len(self.urls) + len(self.backup_cdns),
         }
 
@@ -216,16 +228,84 @@ def parse_douyu_room(page: str, requested_room: str) -> DouyuRoom:
     raise ViewerError("斗鱼网页未提供可确认的真实房间号，请稍后重试。")
 
 
+# 抖音直播档位：数值越大越清晰。ao 是纯音频流（无分辨率、fps 为 0），
+# 交给播放器只会得到黑屏，因此不在此表中，解析时直接丢弃。
+DOUYIN_TIERS = {"origin": (6, "原画"), "uhd": (5, "超清"), "hd": (4, "高清"),
+                "sd": (3, "标清"), "ld": (2, "流畅"), "md": (1, "极速")}
+# 旧结构 flv_pull_url 的键。仅在新结构缺失时使用。
+DOUYIN_LEGACY_TIERS = {"FULL_HD1": (6, "原画"), "HD1": (4, "高清"),
+                       "SD1": (3, "标清"), "SD2": (2, "流畅")}
+
+
+def douyin_secure(url: str) -> str:
+    """抖音接口下发的是 http 地址，但同一 CDN 主机同时提供 https。
+
+    升级为 https 后即可沿用 validate_media_url 的 HTTPS-only 约束与证书校验，
+    不需要为抖音放宽安全规则。
+    """
+    if not isinstance(url, str) or not url:
+        return ""
+    return "https://" + url[len("http://"):] if url.startswith("http://") else url
+
+
+def douyin_streams(stream_url: dict) -> list[dict]:
+    """从抖音 stream_url 提取可选 FLV 档位，按清晰度降序。
+
+    新结构 live_core_sdk_data 优先，旧结构 flv_pull_url 兜底。只保留带 FLV 地址的
+    档位；优先 h264，只有该房间完全没有 h264 时才退回其他编码（PotPlayer 可解 HEVC）。
+    """
+    tiers: list[dict] = []
+    core = (stream_url or {}).get("live_core_sdk_data") or {}
+    raw = (core.get("pull_data") or {}).get("stream_data")
+    if raw:
+        try:
+            decoded = json.loads(raw) if isinstance(raw, str) else raw
+        except (ValueError, TypeError):
+            decoded = {}
+        for key, tier in ((decoded.get("data") or {}) if isinstance(decoded, dict) else {}).items():
+            if key not in DOUYIN_TIERS:
+                continue  # 丢弃 ao 等纯音频档位
+            main = (tier or {}).get("main") or {}
+            backup = (tier or {}).get("backup") or {}
+            urls = [douyin_secure(main.get("flv")), douyin_secure(backup.get("flv"))]
+            urls = [url for url in urls if url]
+            if not urls:
+                continue
+            try:
+                params = json.loads(main.get("sdk_params") or "{}")
+            except (ValueError, TypeError):
+                params = {}
+            # 实测字段名是 VCodec / vbitrate（大小写敏感）。
+            codec = str(params.get("VCodec") or "").lower()
+            kbps = params.get("vbitrate")
+            value, name = DOUYIN_TIERS[key]
+            tiers.append({"value": value, "name": name, "urls": urls, "codec": codec,
+                          "kbps": int(kbps) // 1000 if isinstance(kbps, (int, float)) and kbps else None,
+                          "layout": "live_core_sdk_data"})
+    if not tiers:
+        for key, url in ((stream_url or {}).get("flv_pull_url") or {}).items():
+            if key not in DOUYIN_LEGACY_TIERS or not url:
+                continue
+            value, name = DOUYIN_LEGACY_TIERS[key]
+            tiers.append({"value": value, "name": name, "urls": [douyin_secure(url)], "codec": "",
+                          "kbps": None, "layout": "flv_pull_url"})
+    avc = [tier for tier in tiers if tier["codec"] in ("h264", "avc", "")]
+    chosen = avc or tiers
+    chosen.sort(key=lambda tier: tier["value"], reverse=True)
+    return chosen
+
+
 class PlatformClient:
     def __init__(self, platform: str, cookies=None, *, network_mode="direct"):
-        if platform not in REFERERS:
-            raise ViewerError("不支持的平台。")
-        self.platform = platform
+        spec = require_spec(platform)
+        self.platform, self.spec = platform, spec
         self.session = new_session(cookies, network_mode=network_mode)
-        self.session.headers["Referer"] = REFERERS[platform]
-        self.did = next((c.value for c in self.session.cookies if c.name == "dy_did"), uuid.uuid4().hex)
-        if platform == "douyu":
-            self.session.cookies.set("dy_did", self.did, domain=".douyu.com", path="/")
+        self.session.headers["Referer"] = spec.referer
+        device = spec.device_cookie or "dy_did"
+        self.did = next((c.value for c in self.session.cookies if c.name == device), uuid.uuid4().hex)
+        if spec.device_cookie:
+            self.session.cookies.set(spec.device_cookie, self.did,
+                                     domain="." + spec.cookie_domains[0], path="/")
 
     def close(self):
         self.session.close()
@@ -245,16 +325,20 @@ class PlatformClient:
             raise ViewerError("平台接口返回格式发生变化，请稍后重试。") from None
 
     def login_status(self) -> dict:
-        if self.platform == "bilibili":
+        if self.spec.verify_login:
             data, _ = self._api("https://api.bilibili.com/x/web-interface/nav")
             valid = data.get("code") == 0 and data.get("data", {}).get("isLogin") is True
-            return {"verified": valid, "message": "B 站登录状态有效" if valid else "B 站登录状态无效或已过期"}
-        # No verified Douyu identity endpoint has been established by this investigation.
-        return {"verified": None, "message": "斗鱼 Cookie 已导入；账号有效性尚未单独验证"}
+            suffix = "有效" if valid else "无效或已过期"
+            return {"verified": valid, "message": f"{self.spec.caption}登录状态{suffix}"}
+        # 平台没有可用的身份校验接口时明确返回 None，界面据此不显示“已验证”。
+        return {"verified": None, "message": self.spec.unverified_message}
 
     def resolve(self, room: str, requested: int | None = None) -> Stream:
+        resolver = getattr(self, self.spec.resolve_method, None)
+        if resolver is None:
+            raise ViewerError("该平台的取流实现缺失。", code="platform.unimplemented")
         try:
-            return self._bilibili(room, 10000 if requested is None else requested) if self.platform == "bilibili" else self._douyu(room, 0 if requested is None else requested)
+            return resolver(room, self.spec.preferred_quality if requested is None else requested)
         except (KeyError, TypeError, IndexError, ValueError, OverflowError):
             raise ViewerError("平台返回的数据不完整或格式已变化。") from None
 
@@ -355,10 +439,67 @@ class PlatformClient:
         play = data["data"]
         return play
 
+    def _douyin_session(self):
+        """未登录访问直播首页即可获得 ttwid；这是 enter 接口的唯一前提。"""
+        if getattr(self, "douyin_ready", False):
+            return
+        try:
+            with self.session.get("https://live.douyin.com/", timeout=(8, 20)) as response:
+                if response.status_code != 200:
+                    raise ViewerError(f"抖音首页返回 HTTP {response.status_code}，请稍后重试。")
+        except requests.RequestException as exc:
+            raise ViewerError(connection_message(exc, "抖音首页", "https://live.douyin.com/",
+                                                 self.session.viewer_network_mode),
+                              code=connection_kind(exc)[1]) from None
+        if not any(cookie.name == "ttwid" and cookie.value for cookie in self.session.cookies):
+            raise ViewerError("抖音未下发匿名会话标识（ttwid），请稍后重试或改用已登录 Cookie。",
+                              code="platform.session_rejected")
+        self.douyin_ready = True
+
+    def _douyin_enter(self, room: str) -> dict:
+        params = {
+            "aid": "6383", "app_name": "douyin_web", "live_id": "1", "device_platform": "web",
+            "language": "zh-CN", "enter_from": "web_live", "cookie_enabled": "true",
+            "screen_width": "1920", "screen_height": "1080", "browser_language": "zh-CN",
+            "browser_platform": "Win32", "browser_name": "Chrome", "browser_version": "140.0.0.0",
+            "web_rid": room, "room_id_str": "", "enter_source": "", "is_need_double_stream": "false",
+        }
+        data, _ = self._api("https://live.douyin.com/webcast/room/web/enter/", params=params)
+        code = data.get("status_code")
+        if code == 0:
+            return data
+        if code == 4001038:
+            raise ViewerError("抖音未接受该房间号，请确认直播间链接，或改用 12–15 位房间号。",
+                              code="platform.stream_rejected", level="WARN")
+        if code == 10011:
+            raise ViewerError("抖音接口繁忙，请稍后重试。", code="platform.busy", level="WARN")
+        raise ViewerError(f"抖音接口返回状态 {code}，请稍后重试。", code="platform.stream_rejected")
+
+    def _douyin(self, room, requested):
+        self._douyin_session()
+        payload = self._douyin_enter(room)
+        data = payload.get("data") or {}
+        rooms = data.get("data") or []
+        if not rooms:
+            raise ViewerError("该抖音直播间不存在或当前未开播。", code="room.offline", level="WARN")
+        info = rooms[0]
+        if info.get("status") != 2:
+            raise ViewerError("该抖音直播间当前未开播。", code="room.offline", level="WARN")
+        streams = douyin_streams(info.get("stream_url") or {})
+        if not streams:
+            raise ViewerError("抖音未返回可供本工具播放的 FLV 流，该直播可能仅提供 HLS。",
+                              code="platform.stream_rejected")
+        # requested 是档位数值（6 = 原画）。取不高于请求值的最高档，全都更高时退回最低档。
+        chosen = next((tier for tier in streams if tier["value"] <= requested), streams[-1])
+        qualities = [Quality(tier["value"], tier["name"], tier["kbps"]) for tier in streams]
+        codec = "AVC" if chosen["codec"] in ("h264", "avc", "") else "HEVC"
+        return Stream("douyin", str(room), requested, chosen["value"], chosen["name"],
+                      qualities, list(chosen["urls"]), chosen["kbps"], codec=codec)
+
     def media_urls(self, stream: Stream, *, on_event=None):
         """Resolve backup CDNs lazily, only after previous media opens fail."""
         yield from stream.urls
-        if stream.platform != "douyu":
+        if not self.spec.resign_backups:
             return
         seen = set(stream.urls)
         for cdn in stream.backup_cdns:

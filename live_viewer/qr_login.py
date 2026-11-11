@@ -18,9 +18,11 @@ import requests
 
 from .core import COOKIE_DOMAINS, ViewerError, belongs_to, new_session
 from .network import connection_message
+from .platforms import require_spec
 
 
 def login_url(url: str, platform: str):
+    spec = require_spec(platform)
     try:
         parsed = urlparse(url)
         port = parsed.port
@@ -28,7 +30,7 @@ def login_url(url: str, platform: str):
         raise ViewerError("平台返回的登录地址格式异常。") from None
     if (parsed.scheme != "https" or parsed.username or parsed.password
             or port not in (None, 443) or len(url) > 4096
-            or not belongs_to(parsed.hostname or "", COOKIE_DOMAINS[platform])):
+            or not belongs_to(parsed.hostname or "", spec.cookie_domains)):
         raise ViewerError("平台返回了不支持的登录地址，请重新生成二维码。")
 
 
@@ -161,9 +163,11 @@ class LoginState:
 
 class QrLogin:
     def __init__(self, platform, http=None, *, network_mode="direct"):
-        if platform not in COOKIE_DOMAINS:
-            raise ViewerError("不支持的平台。")
-        self.platform = platform
+        spec = require_spec(platform)
+        if not spec.qr_login:
+            raise ViewerError(f"{spec.caption}暂不支持扫码登录，请改用“粘贴 Cookie”或导入 Cookie 文件。",
+                              code="account.no_qr", level="WARN")
+        self.platform, self.spec = platform, spec
         self.http = http or LoginHttp(platform, network_mode=network_mode)
         self.cancelled = threading.Event()
         self.code = None
@@ -177,7 +181,7 @@ class QrLogin:
             data = response["data"]
             self.code = data["qrcode_key"]
             ttl = 180
-        else:
+        elif self.platform == "douyu":
             response = self.http.request("POST", "https://passport.douyu.com/scan/generateCode",
                                          data={"client_id": "1", "isMultiAccount": "0"})
             if response.get("error") != 0:
@@ -186,6 +190,8 @@ class QrLogin:
             self.code = data["code"]
             ttl = int(data.get("expire") or 180)
             ttl = ttl if 10 <= ttl <= 600 else 180
+        else:
+            raise ViewerError("该平台的扫码流程尚未实现，请改用 Cookie 导入。", code="account.no_qr")
         if not isinstance(self.code, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", self.code):
             raise ViewerError("平台二维码信息格式异常。")
         login_url(data["url"], self.platform)
@@ -200,10 +206,12 @@ class QrLogin:
                 raise ViewerError("B 站扫码状态查询失败，请刷新二维码。")
             status = response["data"]["code"]
             states = {86101: "waiting", 86090: "scanned", 86038: "expired"}
-        else:
+        elif self.platform == "douyu":
             response = self.http.request("GET", "https://passport.douyu.com/japi/scan/auth?" + urlencode({"code": self.code, "time": int(time.time() * 1000)}))
             status = response.get("error")
             states = {-2: "waiting", 1: "scanned", -1: "expired"}
+        else:
+            raise ViewerError("该平台的扫码流程尚未实现，请改用 Cookie 导入。", code="account.no_qr")
         if self.cancelled.is_set():
             return LoginState("cancelled")
         if status in states:
@@ -223,8 +231,8 @@ class QrLogin:
         for cookie in self.http.session.cookies:
             if belongs_to(cookie.domain, COOKIE_DOMAINS[self.platform]) and not cookie.is_expired():
                 jar.set_cookie(copy.copy(cookie))
-        required = "SESSDATA" if self.platform == "bilibili" else "acf_auth"
-        if not any(c.name == required and c.value for c in jar):
+        required = self.spec.qr_credentials
+        if not any(c.name in required and c.value for c in jar):
             raise ViewerError("平台已确认扫码，但未收到登录 Cookie；请刷新二维码或改用 Cookie 导入。")
         self.finished = True
         return LoginState("success", jar)
@@ -233,9 +241,9 @@ class QrLogin:
         self.cancelled.set()
 
     def close(self):
-        if self.platform == "douyu" and self.code and not self.finished:
+        if self.spec.qr_cancel_url and self.code and not self.finished:
             try:
-                self.http.request("POST", "https://passport.douyu.com/scan/deleteCode", data={"code": self.code})
+                self.http.request("POST", self.spec.qr_cancel_url, data={"code": self.code})
             except Exception:
                 pass
         self.code = None
